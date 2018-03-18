@@ -1,0 +1,1032 @@
+<!DOCTYPE html>
+<html lang="en">
+
+	<!-- HEADER -->
+	<head>
+		<!-- Global site tag (gtag.js) - Google Analytics -->
+		<script async src="https://www.googletagmanager.com/gtag/js?id=UA-90046683-1"></script>
+		<script>
+			window.dataLayer = window.dataLayer || [];
+			function gtag(){dataLayer.push(arguments);}
+				gtag('js', new Date());
+
+				gtag('config', 'UA-90046683-1');
+		</script>
+		<meta http-equiv="content-type" content="text/html; charset=UTF-8">
+		<title>A simple solar system with camera controls</title>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+		<link rel="stylesheet" href="./css/base.css">
+		<link rel="icon" href="./images/sparkworks.ico">
+	</head>
+
+	<!-- HTML5 BODY -->
+	<body>
+
+	<script src="../../js/three.js"></script>
+	<script src="../../js/Detector.js"></script>
+	<script src="../../js/Stats.js"></script>
+	<!--script src="./js/OrbitControls_0.js"></script-->
+	<!--script src="./js/THREEx.js"></script>
+	<script src="./js/THREEx_003.js"></script>
+	<script src="./js/THREEx_002.js"></script-->
+	<script src="../../js/math.js"></script>
+
+	<!-- jQuery code to display an information button and box when clicked. -->
+	<!--script src="./js/jquery-1.js"></script>
+	<script src="./js/jquery-ui.js"></script>
+	<script src="./js/info.js"></script>
+	<link rel="stylesheet" href="./css/jquery-ui.css">
+	<link rel="stylesheet" href="./css/info.css"-->
+
+	<!-- Shader javaScript library -->
+	<script src="../../js/ShaderGodRays2.js"></script>
+
+	<!-- SHADERS -->
+	<!-- SURFACE ANIMATION SHADERS -->
+	<script id="vertexShader" type="x-shader/x-vertex">
+		varying vec2 vUv;
+		void main() {
+    			vUv = uv;
+    			gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
+		}
+	</script>
+
+	<!-- fragment shader a.k.a. pixel shader -->
+	<script id="fragmentShader" type="x-shader/x-vertex">
+		uniform sampler2D baseTexture;
+		uniform float baseSpeed;
+		uniform sampler2D noiseTexture;
+		uniform float noiseScale;
+		uniform float alpha;
+		uniform float time;
+
+		varying vec2 vUv;
+		void main() {
+			vec2 uvTimeShift = vUv + vec2( -0.7, 1.5 ) * time * baseSpeed;
+			vec4 noiseGeneratorTimeShift = texture2D( noiseTexture, uvTimeShift );
+			vec2 uvNoiseTimeShift = vUv + noiseScale * vec2( noiseGeneratorTimeShift.r, noiseGeneratorTimeShift.b );
+			vec4 baseColor = texture2D( baseTexture, uvNoiseTimeShift );
+
+			baseColor.a = alpha;
+			gl_FragColor = baseColor;
+		}
+	</script>
+	<!-- END OF SURFACE ANIMATION SHADERS-->
+
+	<!-- ATMOSPHERIC GLOW SHADERS -->
+	<script id="vertexShader2" type="x-shader/x-vertex">
+		uniform vec3 viewVector;
+		uniform float c;
+		uniform float p;
+		varying float intensity;
+		void main() {
+			vec3 vNormal = normalize( normalMatrix * normal );
+    			vec3 vNormel = normalize( normalMatrix * viewVector );
+			intensity = pow( c - dot(vNormal, vNormel), p );
+
+    			gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
+		}
+	</script>
+
+	<!-- fragment shader a.k.a. pixel shader -->
+	<script id="fragmentShader2" type="x-shader/x-vertex">
+		uniform vec3 glowColor;
+		uniform sampler2D atmosphereTexture;
+		varying float intensity;
+		void main() {
+    			vec3 glow = glowColor * intensity;
+    			gl_FragColor = vec4( glow, 1.0 );
+		}
+	</script>
+	<!-- END OF SURFACE GLOW SHADERS -->
+
+	<!-- START OF CREPUSCULAR RAY SHADER -->
+	<script id="fragmentShader3" type="x-shader/x-vertex">
+		uniform float density;
+		uniform float weight;
+		uniform vec2 lightPositionOnScreen;
+		uniform sampler2D firstPass;
+		const int NUM_SAMPLES = 100;
+		void main() {
+			vec2 deltaTextCoord = vec2( gl_TexCoord[0].st - lightPositionOnScreen.xy );
+			vec2 textCoo = gl_TexCoord[0].st;
+			deltaTextCoord *= 1.0 / float(NUM_SAMPLES) * density;
+			float illuminationDecay = 1.0;
+
+			for (int i=0; i<NUM_SAMPLES; i++) {
+				textCoo -= deltaTextCoord;
+				vec4 sample = texture2D(firstPass, textCoo);
+				sample *= illuminationDecay * weight;
+				gl_FragColor += sample;
+				illuminationDecay *= decay;
+			}
+			gl_FragColor *= exposure;
+		}
+	</script>
+	<!-- END OF CREPUSCULAR RAY SHADER -->
+
+
+	<!-- Anchoring divider for three.js webgl -->
+	<div id="ThreeJS"></div>
+
+	<!-- START OF JAVASCRIPT / WEBGL -->
+	<script>
+		/*
+			http://sparkworks.noobgrinder.com - stemkoski.github.io/threejs/
+			last revision: 08.23.2013 9:02PM vorticieflux6626 / eric sparkman
+			version: 0.05alpha
+
+			Development Notes:
+			-------------------------------------------------------------------------------------------
+			filename 		version 	date 		additions, deletions, and revisions
+			-------------------------------------------------------------------------------------------
+			spheres_modded11.html	0.05alpha	08.23.2013	* added: jupiter, saturn, uranus, neptune, pluto
+										         planetData, rotation vecotr, ring boolean, ring radius start / radius stop
+										  	 moons, astronomically correct data and solved elliptical orbits
+
+			spheres_modded15.html 	0.06alpha	08.24.2013	* added: crepuscular ray shader form: http://fabiensanglard.net/lightScattering/index.php
+
+			spheres.html 		0.07alpha	08.24.2013	* deleted: some commented out code blocks: video, water shader materal.
+										  fileserver_update: sparkworks.noobgrinder.com/spheres/spheres.html
+
+			spheres.html		0.08alpha	08.24.2013	* revisions: finally cleaned up jquery-ui.js .png ref errors and fixed info.js
+											     ref to beaker-icon.jpg
+											     added all referenced ui-*.png images to ../images/ url
+
+			spheres_modded16.html	0.09alpha	08.24.2013	* revision: changed the skybox to a cubemap rendered to a sphere geometry, nice fps and no warping!
+
+			spheres_modded17.html	0.10alpha	08.24.2013	* revision: experimenting with adding crepuscular rays to sheres.html with ShaderGodRays.js from
+											    http://threejs.org/examples/#webgl_postprocessing_godrays
+
+			spheres_modded18.html	0.11alpha	08.24.2013	* added: functioning postprocessing and ShaderGodRay.js: crepuscular rays effectively rendered...
+
+			NOTES:
+			------
+			1. earth coming into frame (from solar_system_modded11.html --> spheres.html) dropping performance
+			2. hdri maps are designed to map to spheres, possibly better quality using those
+			3. If the camera is an object you might be able to "project" the texture onto the cube. -- M.W. 08.20.2013
+		*/
+
+		// MAIN
+
+		// Globals associated with ShaderGodRays.js & crepuscular ray rendering incorporation
+		var postprocessing = { enabled: true };
+		var autoAnimate = true;
+		var deltaTimeAnimate = 4;
+		var elapsedTimeAnimate = 0;
+		var enableOrbitLines = true;
+		var followPlanet = -1;
+		var screenSpacePosition = new THREE.Vector3();
+		var projector = new THREE.Projector();
+		var margin = 100;
+		var height = window.innerHeight - 2 * margin;
+		var bgColor = 0x111111;
+		var sunColor = 0xffff00;
+		var materialDepth = new THREE.MeshDepthMaterial();
+
+		// camera transition animation
+		var snapToPlanet = false;
+		var smoothCamera = true;
+		var randomVector = new THREE.Vector3( 0, 0, 0 );
+		var transition = false;
+		var deltaVector3Step = new THREE.Vector3( 0, 0, 0 );
+		var oldCameraPosition = new THREE.Vector3( 0, 0, 0 );
+		var numSteps = 768;
+		var stepsTaken = 0;
+		var transitionStepSize = 0;
+		var randomPlanet = 1;
+
+		// URL strings...
+		var imagePath = "../../images/";
+
+		// standard global variables
+		var container, scene, camera, renderer; /*controls,*/ //stats;
+		//var keyboard = new THREEx.KeyboardState();
+
+		// global physics variables
+		var physicsClock = new THREE.Clock(true);
+		var deltaTime = physicsClock.getDelta();
+		var elapsedTime = physicsClock.getElapsedTime();
+
+		// numerical constants  & scaling factors
+		var STAR_BOX_SCALE = 250000;		// edge length of the sky cube
+		var AU = 1.49597871E8;			// 1 AU = 149,597,871 km
+		var AU_SCALE = 5.000E4;			// AU_SCALE reduces 100,000 km to 1 display coordinate point distance
+		var RADIAL_SCALE = (3.000E2);		// planet radius scaler
+		var NUM_PLANETS = 10; 			// 0 is the sun
+		var G = 6.67384E-11; 			// (m^3/kg*s^2)
+		var PI = Math.PI;			// 3.14... from Math.js
+
+		// star particle system settings
+		var NVERTICES = 667;
+		var NMATERIALS = 8;
+		var NPARTICLESYSTEMS = 24;
+
+		// planetary ring particle systems
+		var NUM_RINGS = 3;
+		var ringNumVertices = 1512;
+		var ringNumMaterials = 18;
+		var ringNumParticleSystems = 18;
+		var baseColor = 0x000000;
+		var colorVariation = 0x333300;
+
+		// orbit line
+		Orbit_N_SEGMENTS = 720;
+
+		// spherical resolution settings
+		var segments = 40;
+		var rings = 32;
+
+		// LOAD TEXTURE IMAGES -- NOTE: All nasa_planet_texture.jpg images are 428 x 321 pixel resolution :NOTE
+		planetTexture = new Array(NUM_PLANETS);
+		planetTexture[0] = new THREE.ImageUtils.loadTexture( imagePath + "sun_texture.jpg");				// TODO: this texture isn't even used, remove!
+		planetTexture[1] = new THREE.ImageUtils.loadTexture( imagePath + "nasa_scaled_mercury_texture_from_pv.jpg");	// NASA lacked the mercury and uranus textures!
+		planetTexture[2] = new THREE.ImageUtils.loadTexture( imagePath + "nasa_venus_texture.jpg");
+		planetTexture[3] = new THREE.ImageUtils.loadTexture( imagePath + "nasa_earth_texture.jpg");
+		planetTexture[4] = new THREE.ImageUtils.loadTexture( imagePath + "nasa_mars_texture.jpg");
+		planetTexture[5] = new THREE.ImageUtils.loadTexture( imagePath + "nasa_jupiter_texture.jpg");
+		planetTexture[6] = new THREE.ImageUtils.loadTexture( imagePath + "nasa_saturn_texture.jpg");
+		planetTexture[7] = new THREE.ImageUtils.loadTexture( imagePath + "nasa_scaled_uranus_texture_from_pv.jpg");
+		planetTexture[8] = new THREE.ImageUtils.loadTexture( imagePath + "nasa_neptune_texture.jpg");
+		planetTexture[9] = new THREE.ImageUtils.loadTexture( imagePath + "nasa_pluto_texture.jpg");
+
+		// planet materials
+		planetMaterial = new Array(NUM_PLANETS); // <-- planets + sun + skydome
+		for (var i=0; i<NUM_PLANETS; i++) {
+			planetMaterial[i] = new THREE.MeshPhongMaterial( { map: planetTexture[i] } );//overdraw: true, side: THREE.FrontSide } );
+			//new THREE.MeshBasicMaterial( { map: planetTexture[i], overdraw: true, side: THREE.FrontSide } );
+		}
+
+		//////////////////////////////////////////////////////////////////////////////////////
+		// NOTE!!! -- there is an attribute .position which may be better to use -- !!!NOTE //
+		//////////////////////////////////////////////////////////////////////////////////////
+		var planetPosition = new Array(NUM_PLANETS); // index
+		planetPosition[0] = new THREE.Vector3( 0.000, 0.0, 0.0); // sun
+		planetPosition[1] = new THREE.Vector3( 2.100, 0.0, 0.0); // mercury
+		planetPosition[2] = new THREE.Vector3(-2.100, 0.0, 0.0); // venus - modded 07.09.2013 vorticieflux6626
+		planetPosition[3] = new THREE.Vector3( 2.200, 0.0, 0.0); // earth
+		planetPosition[4] = new THREE.Vector3( 4.100, 0.0, 0.0); // mars
+		planetPosition[5] = new THREE.Vector3( 7.000, 0.0, 0.0); // jupiter
+		planetPosition[6] = new THREE.Vector3( 9.000, 0.0, 0.0); // saturn
+		planetPosition[7] = new THREE.Vector3( 11.55, 0.0, 0.0); // uranus
+		planetPosition[8] = new THREE.Vector3( 13.25, 0.0, 0.0); // neptune
+		planetPosition[9] = new THREE.Vector3( 15.00, 0.0, 0.0); // pluto
+
+		// multitype array to store mass(kg), size(radius in kilometers), rotation, orbital radius (in display coordinates TODO: change to astro coords),
+		// rotation axis vector	(relative to position), ring present boolean, ring radius start, ring radius stop (relative to planet radius)
+		var planetData = new Array(NUM_PLANETS);
+		//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+		// planet         mass(kg)      radius(km) 	rotation   peri+api avg(AU)	  rotation axis vector			ring?	rad(i)  rad(f)  //
+		//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+		// this line represents the actual size of the sun which is just plain way to fucking big... //
+		planetData[0] = [ 1.9891e30,    7.563E4, 	0.01000,	   0.00000, 	new THREE.Vector3(0.0, 1.0, 0.0), 	false,  null,   null,	1.00 ]; // scaled sun -- artistic license
+		planetData[1] = [ 3.3000E23, 	2.189E3, 	0.09000,     (0.31+0.47)/2,	new THREE.Vector3(0.0, 1.0, 0.0), 	false, 	null, 	null,	0.25 ]; // mercury
+		planetData[2] = [ 4.8700E24, 	6.050E3,       -0.20000,     (0.72+0.73)/2,	new THREE.Vector3(0.0, 1.0, 0.0),	false, 	null, 	null,	0.20 ]; // venus
+		planetData[3] = [ 5.9720E24, 	6.378E3,	0.06000,     (0.98+1.02)/2,	new THREE.Vector3(0.0, 1.0, 0.0), 	false, 	null, 	null, 	0.15 ]; // earth -- size / 6.378E3 = 1.0 coordinate size
+		planetData[4] = [ 3.7600E24,	3.397E3,	0.08000,     (1.38+1.67)/2,	new THREE.Vector3(0.0, 1.0, 0.0), 	false, 	null, 	null,	0.30 ]; // mars
+		planetData[5] = [ 1.9900E25, 	7.140E4,	0.03000,     (4.95+5.45)/2,	new THREE.Vector3(0.0, 1.0, 0.0), 	false, 	null, 	null,	0.33 ]; // jupiter TODO: change to actual for the rest (5-9)
+		planetData[6] = [ 7.2522E24, 	6.000E4,	0.11000,    (9.01+10.07)/2,	new THREE.Vector3(0.0, 1.0, 0.0),  	 true, 	1.25, 	1.66,  -0.50 ]; // saturn
+		planetData[7] = [ 6.2525E24, 	2.620E4,	0.07000,   (18.28+20.09)/2,	new THREE.Vector3(1.0, 0.0, 0.0),  	 true, 	1.33, 	1.77,	0.33 ]; // uranus
+		planetData[8] = [ 6.1111E24, 	2.420E4,    	0.08000,   (29.80+30.32)/2,	new THREE.Vector3(0.0, 1.0, 0.0),  	 true, 	1.22, 	1.55,	0.18 ]; // neptune
+		planetData[9] = [ 9.8911E22, 	1.222E3,    	0.15000,     (29.6+49.3)/2,	new THREE.Vector3(0.0, 1.0, 0.0), 	false, 	null, 	null,	0.44 ]; // pluto
+
+		/*
+		// Using Three.js for velocity vectors, to simplify physics calcs
+		var planetVelocity = new Array(NUM_PLANETS);
+		planetVelocity[0] = new THREE.Vector3( 0.0, 0.0, 0.0); // vstart = 0
+		planetVelocity[1] = new THREE.Vector3( 0.0, 0.0, 0.0); // vstart = in 1.5
+		planetVelocity[2] = new THREE.Vector3( 0.0, 0.0, 0.0); // vstart = out 1.5
+		planetVelocity[3] = new THREE.Vector3( 0.0, 0.0, 0.0); // vstart = in 2.0
+		planetVelocity[4] = new THREE.Vector3( 0.0, 0.0, 0.0); //
+		*/
+
+		// planet geometries
+		var planetGeometry = new Array(NUM_PLANETS);
+		for (var i=0; i<NUM_PLANETS; i++) {
+			planetGeometry[i] = new THREE.SphereGeometry( planetData[i][1] / RADIAL_SCALE, segments, rings );
+		}
+
+		// planet meshes
+		var planet = new Array(NUM_PLANETS);
+		for (var i=0; i<NUM_PLANETS; i++) {
+			planet[i] = createSphere( ( planetData[i][1] / RADIAL_SCALE ), planetGeometry[i], planetMaterial[i] );
+		}
+
+		// orbit lines
+		var orbitLine = new Array(NUM_PLANETS);
+		for (var i=0; i<NUM_PLANETS; i++) {
+			orbitLine[i] = createOrbitLine( (planetData[i][3] * AU) / AU_SCALE );
+		}
+
+		// starGroup
+		var stars = new THREE.Object3D();
+		stars = createStars( 1.3 * (planetData[9][3] * AU) / AU_SCALE );
+
+		// ringGroup
+		var ring = new Array(NUM_RINGS);
+		for (var i=0; i<NUM_RINGS; i++) {
+			ring[i] = createRing( (planetData[6+i][6]*planetData[6+i][1])/RADIAL_SCALE, (planetData[6+i][7]*planetData[6+1][1])/RADIAL_SCALE, baseColor, colorVariation );
+		}
+
+		init();
+		animate();
+
+		// FUNCTIONS
+		function init() {
+
+			// SCENE
+			scene = new THREE.Scene();
+
+			// CAMERA
+			var SCREEN_WIDTH = window.innerWidth, SCREEN_HEIGHT = window.innerHeight;
+			var VIEW_ANGLE = 45, ASPECT = SCREEN_WIDTH / SCREEN_HEIGHT, NEAR = 0.1, FAR = STAR_BOX_SCALE * 2;
+			camera = new THREE.PerspectiveCamera( VIEW_ANGLE, ASPECT, NEAR, FAR);
+			scene.add(camera);
+			camera.position.set(0,150,4000);
+			camera.lookAt(scene.position);
+
+			// RENDERER
+			if ( Detector.webgl )
+				renderer = new THREE.WebGLRenderer( {antialias:true} );
+			else
+				renderer = new THREE.CanvasRenderer();
+
+			renderer.setSize(SCREEN_WIDTH, SCREEN_HEIGHT);
+			container = document.getElementById( 'ThreeJS' );
+			container.appendChild( renderer.domElement );
+
+			// EVENTS
+			//THREEx.WindowResize(renderer, camera);
+
+			// LIGHT: light -- one point light object showing shading effects...
+			var light = new THREE.PointLight(0xffffff, 2, (planetData[9][3] * AU * 2) / AU_SCALE );
+			//var light = new THREE.AmbientLight(0x999999);
+			light.position.set(0,0,0);
+			scene.add(light);
+
+			// Star particles
+			scene.add(stars);
+
+			// Ring particles
+			for (var i=0; i<NUM_RINGS; i++) {
+				scene.add(ring[i]);
+				ring[i].rotation.x += Math.PI / 2;
+				ring[i].position = planet[6+i].position.clone();
+				//ring[i].rotation.x = Math.PI / 2;
+			}
+
+			////////////
+			// CUSTOM //
+			////////////
+
+			// This is from stemkoski.github.io -- animated textures...
+			var noiseTexture = new THREE.ImageUtils.loadTexture( imagePath + 'clouds_512x512_00.png' );
+			noiseTexture.wrapS = noiseTexture.wrapT = THREE.RepeatWrapping;
+
+			var lavaTexture = new THREE.ImageUtils.loadTexture( imagePath + 'sun_texture_512x512_01.png' );
+			lavaTexture.wrapS = lavaTexture.wrapT = THREE.RepeatWrapping;
+
+			// use "this." to create global object
+			this.customUniforms = {	baseTexture: 	{ type: "t", value: lavaTexture },
+						baseSpeed: 	{ type: "f", value: 0.05 },
+						noiseTexture: 	{ type: "t", value: noiseTexture },
+						noiseScale:	{ type: "f", value: 0.5337 },
+						alpha: 		{ type: "f", value: 1.0 },
+						time: 		{ type: "f", value: 1.0 }
+			};
+
+			// create custom material from the shader code above
+			// that is within specially labeled script tags
+			var customMaterial = new THREE.ShaderMaterial( { uniforms: customUniforms,
+									 vertexShader:   document.getElementById( 'vertexShader'   ).textContent,
+									 fragmentShader: document.getElementById( 'fragmentShader' ).textContent,
+									 side: THREE.FrontSide
+			});
+
+			/////////////
+			// PLANETS //
+			/////////////
+
+			// special dynamic materials used to create meshes here -- sun surface etc...
+			planet[0] = createSphere( (planetData[0][1] / RADIAL_SCALE) , planetGeometry[0], customMaterial); // sun surface dynamic material
+
+			// add the planets to the scene iteratively
+			for( var i=0; i<NUM_PLANETS; i++) {
+				scene.add(planet[i]);
+
+				// also add orbitLine
+				if ( enableOrbitLines )
+					scene.add(orbitLine[i]);
+
+			}
+
+			/////////////
+			// CUSTOM2 //
+			/////////////
+
+			var customMaterial = new THREE.ShaderMaterial({ uniforms: { "c": { type: "f", value: 1.0 },
+										    "p": { type: "f", value: 2.0 },
+									glowColor: { type: "c", value: new THREE.Color(0x000099) },
+									viewVector: { type: "v3", value: camera.position } },
+
+									vertexShader: document.getElementById('vertexShader2').textContent,
+									fragmentShader: document.getElementById( 'fragmentShader2' ).textContent,
+									side: THREE.FrontSide,
+									blending: THREE.AdditiveBlending,
+									transparent: true
+			});
+
+			// TODO: change to atmospheric glow
+			this.atmosphereGlow = new THREE.Mesh( planetGeometry[3].clone(), customMaterial.clone() );
+    			atmosphereGlow.position = planet[3].position;
+			atmosphereGlow.scale.multiplyScalar(1.6);
+			scene.add( atmosphereGlow );
+
+			// Here the initPostProcessing function is called
+			initPostProcessing();
+
+		// END OF INIT()//
+		}
+
+		//Orbit.prototype.init = function(distance) {
+		function createOrbitLine ( distance ) {
+
+			// Create an empty geometry object to hold the line vertex data
+			var geometry = new THREE.Geometry();
+
+			// Create points along the circumference of a circle
+
+			// with radius == distance ????
+
+			var i, len = 60, twopi = 2 * Math.PI;
+
+			for (i = 0; i <= Orbit_N_SEGMENTS; i++){
+
+				var x = distance * Math.cos( i / Orbit_N_SEGMENTS * twopi );
+				var z = distance * Math.sin( i / Orbit_N_SEGMENTS * twopi );
+				var vertex = new THREE.Vector3(x, 0, z);
+				geometry.vertices.push(vertex);
+
+			}
+			material = new THREE.LineBasicMaterial( { color: 0x333333, opacity: .1, linewidth: .05 } );
+
+			// Create the line
+			var line = new THREE.Line( geometry, material );
+
+			// Tell the framework about our object
+			return line;
+		}
+
+		// Ring particle init function for planetary rings systems
+		function createRing( innerRadius, outerRadius, baseColor, colorVariation ) {
+
+			// Create a group to hold our Stars particles
+			var ringGroup = new THREE.Object3D();
+			//var i;
+
+			ringGeometry = new Array(ringNumParticleSystems);
+			for (var i=0; i < ringNumParticleSystems; i++) {
+				ringGeometry[i] = new THREE.Geometry();
+			}
+
+			var ringWidth = outerRadius - innerRadius;
+
+			// Create random particle locations in a circle, stepping outward from inner radius to outer radius
+			for ( var k=0; k < ringNumParticleSystems; k ++ ) {
+
+				for (var i = 0; i < ringNumVertices; i++) {
+
+					var randomRadius = innerRadius + (Math.random() * ringWidth);
+					var randomTheta = Math.random() * Math.PI * 2;
+
+					var vector = new THREE.Vector3(	Math.cos(randomTheta) * randomRadius,//(innerRadius + (Math.random() * stepSize)), // circle x
+									Math.sin(randomTheta) * randomRadius,//(innerRadius + (Math.random() * stepSize)), // circle y
+									Math.random()*3);			     // 3px variation in z...
+
+					/*if (vector.length() < minDistance) {
+						vector = vector.setLength(minDistance);
+					}*/
+
+					//ringGeometry.vertices.push( new THREE.Vertex( vector ) );
+					ringGeometry[k].vertices.push(  vector  );
+				}
+			}
+
+			// Create a range of sizes and colors for the stars
+			var ringMaterials = [];
+			for (var i = 0; i < ringNumMaterials; i++) {
+
+				ringMaterials.push( new THREE.ParticleBasicMaterial( {
+
+					color: baseColor + (Math.random() * 0x0000ff) + (Math.random() * 0x00ff00) + (Math.random() * 0xff0000),
+					//color: ( 0x101000 * ((Math.random() * 1)+i+1) ) + (0x000010 * (i + 1)),
+					size: (Math.random() * 3),
+					sizeAttenuation: true
+
+				}));
+
+			}
+
+			// Create several particle systems spread around in a circle, cover the sky
+			for (var  i = 0; i < ringNumParticleSystems; i ++ )	{
+				var rings = new THREE.ParticleSystem( ringGeometry[i], ringMaterials[ i ] );
+				//stars.rotation.y = i / (Math.PI * 2);
+				ringGroup.add( rings );
+			}
+
+			return ringGroup;
+
+		}
+		// end of ring particle init function
+
+		// Star particle init function -- from webgl up and running, they used a Sim.js script... I will not...
+		// Sim.Publisher, Sim.App and Sim.Object are all inherited methods from this absent javascript...
+		function createStars( minDistance ) {
+
+			// Create a group to hold our Stars particles
+			var starsGroup = new THREE.Object3D();
+			var i;
+			var starsGeometry = new THREE.Geometry();
+
+			// Create random particle locations
+			for ( i = 0; i < NVERTICES; i++) {
+				var vector = new THREE.Vector3(	(Math.random() * 2 - 1) * minDistance,
+								(Math.random() * 2 - 1) * minDistance,
+								(Math.random() * 2 - 1) * minDistance);
+
+				if (vector.length() < minDistance) {
+					vector = vector.setLength(minDistance);
+				}
+
+				starsGeometry.vertices.push( vector );
+			}
+
+			// Create a range of sizes and colors for the stars
+			var starsMaterials = [];
+			for (i = 0; i < NMATERIALS; i++) {
+
+				starsMaterials.push( new THREE.ParticleBasicMaterial( {
+					color: 0x101010 * (i + 1),
+					//color: ( 0x101000 * ((Math.random() * 1)+i+1) ) + (0x000010 * (i + 1)),
+					size: i % 2 + (Math.random() * 1),
+					sizeAttenuation: false
+				}));
+
+			}
+
+			// Create several particle systems spread around in a circle, cover the sky
+			for ( i = 0; i < NPARTICLESYSTEMS; i ++ )	{
+				var stars = new THREE.ParticleSystem( starsGeometry, starsMaterials[ i % NMATERIALS ] );
+				stars.rotation.y = i / (Math.PI * 2);
+				starsGroup.add( stars );
+			}
+
+			return starsGroup;
+
+		}
+
+		// end of code insert
+
+		// Creates sphere geometry and attached it to passed global, returns THREE.Mesh
+		function createSphere( radius, sphereGeometry, sphereMaterial ) {
+
+			// create a new mesh with sphere geometry - we will cover the sphereMaterial next!
+			var sphere = new THREE.Mesh( sphereGeometry, sphereMaterial );
+			return sphere;
+
+		}
+
+		////////////////////////////////
+		// INITIALIZE POST PROCESSING // -- Added along with ShaderGodRays.js and the hope of crepuscular ray rendering from the sun...
+		////////////////////////////////
+
+		function initPostProcessing() {
+
+			postprocessing.scene = new THREE.Scene();
+
+			postprocessing.camera = new THREE.OrthographicCamera( window.innerWidth / - 2, window.innerWidth / 2,  height / 2, height / - 2, -10000, 10000 );
+			postprocessing.camera.position.z = 100;
+
+			postprocessing.scene.add( postprocessing.camera );
+
+			var pars = { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, format: THREE.RGBFormat };
+			postprocessing.rtTextureColors = new THREE.WebGLRenderTarget( window.innerWidth, height, pars );
+
+			// Switching the depth formats to luminance from rgb doesn't seem to work. I didn't
+			// investigate further for now.
+			// pars.format = THREE.LuminanceFormat;
+
+			// I would have this quarter size and use it as one of the ping-pong render
+			// targets but the aliasing causes some temporal flickering
+
+			postprocessing.rtTextureDepth = new THREE.WebGLRenderTarget( window.innerWidth, height, pars );
+
+			// Aggressive downsize god-ray ping-pong render targets to minimize cost
+
+			var w = window.innerWidth / 4.0;
+			var h = height / 4.0;
+			postprocessing.rtTextureGodRays1 = new THREE.WebGLRenderTarget( w, h, pars );
+			postprocessing.rtTextureGodRays2 = new THREE.WebGLRenderTarget( w, h, pars );
+
+			// god-ray shaders
+
+			var godraysGenShader = THREE.ShaderGodRays[ "godrays_generate" ];
+			postprocessing.godrayGenUniforms = THREE.UniformsUtils.clone( godraysGenShader.uniforms );
+			postprocessing.materialGodraysGenerate = new THREE.ShaderMaterial( {
+
+				uniforms: postprocessing.godrayGenUniforms,
+				vertexShader: godraysGenShader.vertexShader,
+				fragmentShader: godraysGenShader.fragmentShader
+
+			} );
+
+			var godraysCombineShader = THREE.ShaderGodRays[ "godrays_combine" ];
+			postprocessing.godrayCombineUniforms = THREE.UniformsUtils.clone( godraysCombineShader.uniforms );
+			postprocessing.materialGodraysCombine = new THREE.ShaderMaterial( {
+
+				uniforms: postprocessing.godrayCombineUniforms,
+				vertexShader: godraysCombineShader.vertexShader,
+				fragmentShader: godraysCombineShader.fragmentShader
+
+			} );
+
+			var godraysFakeSunShader = THREE.ShaderGodRays[ "godrays_fake_sun" ];
+			postprocessing.godraysFakeSunUniforms = THREE.UniformsUtils.clone( godraysFakeSunShader.uniforms );
+			postprocessing.materialGodraysFakeSun = new THREE.ShaderMaterial( {
+
+				uniforms: postprocessing.godraysFakeSunUniforms,
+				vertexShader: godraysFakeSunShader.vertexShader,
+				fragmentShader: godraysFakeSunShader.fragmentShader
+
+			} );
+
+			postprocessing.godraysFakeSunUniforms.bgColor.value.setHex( bgColor );
+			postprocessing.godraysFakeSunUniforms.sunColor.value.setHex( sunColor );
+
+			// This looks like where I can turn down the intensity of the God Rays...
+			postprocessing.godrayCombineUniforms.fGodRayIntensity.value = 0.25;
+
+			postprocessing.quad = new THREE.Mesh( new THREE.PlaneGeometry( window.innerWidth, height ), postprocessing.materialGodraysGenerate );
+			postprocessing.quad.position.z = -9900;
+			postprocessing.scene.add( postprocessing.quad );
+
+		}
+
+		function animate() {
+    			requestAnimationFrame(animate);
+			render();
+			update();
+		}
+
+		////////////////////////////////////////////////////////////////////////////////////////////////
+		// THIS IS THE FUNCTION WHERE ALL TIME/SIM DEPENDENT VARIABLES ARE UPDATED AND EVENTS HANDLED //
+		////////////////////////////////////////////////////////////////////////////////////////////////
+		function update() {
+
+			deltaTime = physicsClock.getDelta(); // calling this twice makes the 2nd call = 0...
+
+			// autoanimation sequence...
+			if ( autoAnimate && !transition ) {
+
+				elapsedTimeAnimate += deltaTime; //physicsClock.getDelta();
+				if ( elapsedTimeAnimate >= deltaTimeAnimate ) {
+
+					newView = true;
+					followPlanet += 1;
+					elapsedTimeAnimate = 0;
+
+					if ( followPlanet >= 10 )
+						followPlanet = 0;
+
+				}
+			}
+			/*
+			// Handle keyboard events
+			if ( keyboard.pressed("0") ) {
+				//camera.position = planet[0].position.clone();
+				//camera.position.z += (planetData[0][1] / RADIAL_SCALE) * 2;
+				followPlanet = 0;
+				//newView = true;
+			}
+
+			if ( keyboard.pressed("1") ) {
+				//camera.lookAt( planet[1].position );
+				//camera.position = planet[1].position.clone(); //multiplyScalar( 3.30 );
+				followPlanet = 1;
+				//newView = true;
+			}
+
+			if ( keyboard.pressed("2") ) {
+				//camera.position = planet[2].position.clone();
+				followPlanet = 2;
+				//newView = true;
+			}
+
+			if ( keyboard.pressed("3") ) {
+				//camera.position = planet[3].position.clone();
+				followPlanet = 3;
+				//newView = true;
+			}
+
+			if ( keyboard.pressed("4") ) {
+				//camera.position = planet[4].position.clone();
+				followPlanet = 4;
+				//newView = true;
+			}
+
+			if ( keyboard.pressed("5") ) {
+				//camera.position = planet[5].position.clone();
+				followPlanet = 5;
+				//newView = true;
+			}
+
+			if ( keyboard.pressed("6") ) {
+				//camera.position = planet[6].position.clone();
+				followPlanet = 6;
+				//newView = true;
+			}
+
+			if ( keyboard.pressed("7") ) {
+				//camera.position = planet[7].position.clone();
+				followPlanet = 7;
+				//newView = true;
+			}
+
+			if ( keyboard.pressed("8") ) {
+				//camera.position = planet[8].position.clone();
+				followPlanet = 8;
+				// newView = true;
+			}
+
+			if ( keyboard.pressed("9") ) {
+				//camera.position = planet[9].position.clone();
+				followPlanet = 9;
+				//newView = true;
+			}
+
+			if ( keyboard.pressed("x") ) {
+				//enableOrbitLines = false;
+				followPlanet = -1;
+				//newView = true;
+			}
+
+			if ( keyboard.pressed("s") ) {
+				//enableOrbitLines = false;
+				smoothCamera = !smoothCamera;
+				//newView = true;
+			}
+
+			if ( keyboard.pressed("p") ) {
+				//enableOrbitLines = false;
+				snapToPlanet = !snapToPlanet;// = true;
+				//newView = true;
+			}
+
+			if ( keyboard.pressed("a") ) {
+				//enableOrbitLines = false;
+				autoAnimate = !autoAnimate;// = true;
+				//newView = true;
+			}
+			*/
+			// update physics clock variables
+			//deltaTime = physicsClock.getDelta();
+			elapsedTime = physicsClock.getElapsedTime();
+
+			/////////////////////////
+			// PLANET PHYSICS LOOP //
+			/////////////////////////
+
+			/* TODO: replace dumb circle orbits with approximate solved Newtonian vector physics */
+			var i = NUM_PLANETS;
+			var j = 0;
+			while( i-- ) {
+
+				planetPosition[i].x = ((planetData[i][3]*AU)/AU_SCALE) * Math.cos(PI * elapsedTime * planetData[i][8] / (i + 1));
+				planetPosition[i].z = ((planetData[i][3]*AU)/AU_SCALE) * Math.sin(PI * elapsedTime * planetData[i][8] / (i + 1));
+				planet[i].position.set(planetPosition[i].x, planetPosition[i].y, planetPosition[i].z);
+				planet[i].rotation.y += planetData[i][2];
+				if (planetData[i][5]) {
+					ring[NUM_RINGS - j - 1].position.set(planetPosition[i].x, planetPosition[i].y, planetPosition[i].z);//.clone();
+					ring[NUM_RINGS - j - 1].rotation.z += planetData[i][2];
+					j++;
+				}
+
+				// chase planet with camera if selected
+				if ( followPlanet != -1 ) {
+
+					if ( newView && !snapToPlanet) {
+
+						oldCameraPosition = camera.position.clone();
+
+						// random auto view modifier...
+
+							if ( followPlanet != 10 ) {
+
+								randomVector = new THREE.Vector3( ((planetData[followPlanet][1])/RADIAL_SCALE) * Math.random(),
+									       			  ((planetData[followPlanet][1])/RADIAL_SCALE) * Math.random(),
+									       			  ((planetData[followPlanet][1])/RADIAL_SCALE) * Math.random() );
+								randomVector.add( planet[ followPlanet ].position.clone().multiplyScalar( 0.75 ) );
+								//newView = false;
+
+							} else {
+
+								randomVector = new THREE.Vector3( 4096 * Math.random(),
+												  4096 * Math.random(),
+										        	  4096 * Math.random() );
+								randomPlanet = Math.round( Math.random() * 9 );
+
+								//camera.position = randomVector;
+								camera.lookAt( planet[ randomPlanet ].position.clone() );
+
+							}
+
+
+						// calculate deltaVector3 step size...
+						deltaVector3Step.subVectors( randomVector, oldCameraPosition ); // vector3
+						transitionStepSize = deltaVector3Step.length() / numSteps;	// float scalar
+						deltaVector3Step.normalize();					// unitVector of Step Direction
+						deltaVector3Step.multiplyScalar( transitionStepSize );		// vector3 step to get there in numSteps
+
+						newView = false;
+						transition = true;
+
+					} //else if (snapToPlanet) {
+
+						//randomVector = planet[followPlanet].position.multiplyScalar(.85);
+
+					//}
+
+					//camera.position = //planet[ followPlanet ].position.clone().multiplyScalar( 0.75 ).add( randomVector );
+					if ( camera.position.distanceTo( randomVector ) > transitionStepSize && ( stepsTaken <= numSteps ) && smoothCamera ) {
+						camera.position.add( deltaVector3Step.clone() );
+						stepsTaken++;
+					} else {
+						camera.position = randomVector;
+						transition = false;
+						stepsTaken = 0;
+					}
+
+					if (snapToPlanet) {
+						camera.position = planet[followPlanet].position.clone();
+						camera.position.z += 300;
+						camera.position.y += 456;
+					}
+
+					if ( followPlanet != 10 ) {
+						camera.lookAt( planet[ followPlanet ].position.clone() );
+						if (transition == false) {
+							camera.position = planet[followPlanet].position.clone();
+							camera.position.z += 300;
+							camera.position.y += 456;
+						}
+					}
+					//camera.rotation += ( Math.PI / 2 );
+					//	cameraFocus = planet[ followPlanet ].position.clone();
+				}
+
+				// conditional atmosphereGlow reorientation
+				if ( i == 3 ) {
+					atmosphereGlow.material.uniforms.viewVector.value = new THREE.Vector3().subVectors( camera.position, atmosphereGlow.position );
+				}
+
+			}
+
+			// update sun shader
+			customUniforms.time.value += deltaTime;
+
+		}
+
+		/////////////////////
+		// RENDER FUNCTION //
+		/////////////////////
+
+		function render() {
+
+			// IMPLEMENTING SOME EXPERIMENTAL POST-PROCESSING HERE //
+			if ( postprocessing.enabled ) {
+
+				// Find the screenspace position of the sun
+
+				screenSpacePosition.copy( planetPosition[0] );
+				projector.projectVector( screenSpacePosition, camera );
+
+				screenSpacePosition.x = ( screenSpacePosition.x + 1 ) / 2;
+				screenSpacePosition.y = ( screenSpacePosition.y + 1 ) / 2;
+
+				// Give it to the god-ray and sun shaders
+
+				postprocessing.godrayGenUniforms[ "vSunPositionScreenSpace" ].value.x = screenSpacePosition.x;
+				postprocessing.godrayGenUniforms[ "vSunPositionScreenSpace" ].value.y = screenSpacePosition.y;
+
+				postprocessing.godraysFakeSunUniforms[ "vSunPositionScreenSpace" ].value.x = screenSpacePosition.x;
+				postprocessing.godraysFakeSunUniforms[ "vSunPositionScreenSpace" ].value.y = screenSpacePosition.y;
+
+				// -- Draw sky and sun --
+
+				// Clear colors and depths, will clear to sky color
+
+				//renderer.clearTarget( postprocessing.rtTextureColors, true, true, false );
+
+				// Sun render. Runs a shader that gives a brightness based on the screen
+				// space distance to the sun. Not very efficient, so i make a scissor
+				// rectangle around the suns position to avoid rendering surrounding pixels.
+
+				var sunsqH = 0.14; //* height; // 0.74 depends on extent of sun from shader
+				var sunsqW = 0.14; //* height; // both depend on height because sun is aspect-corrected
+
+				//screenSpacePosition.x *= window.innerWidth;
+				//screenSpacePosition.y *= height;
+
+				renderer.setScissor( screenSpacePosition.x - sunsqW / 2, screenSpacePosition.y - sunsqH / 2, sunsqW, sunsqH );
+				renderer.enableScissorTest( true );
+
+				postprocessing.godraysFakeSunUniforms[ "fAspect" ].value = window.innerWidth;// / height;
+
+				postprocessing.scene.overrideMaterial = postprocessing.materialGodraysFakeSun;
+				renderer.render( postprocessing.scene, postprocessing.camera, postprocessing.rtTextureColors );
+
+				renderer.enableScissorTest( false );
+
+				// -- Draw scene objects --
+
+				// Colors
+
+				scene.overrideMaterial = null;
+				renderer.render( scene, camera, postprocessing.rtTextureColors );
+
+				// Depth
+
+				scene.overrideMaterial = materialDepth;
+				renderer.render( scene, camera, postprocessing.rtTextureDepth, true );
+
+				// -- Render god-rays --
+
+				// Maximum length of god-rays (in texture space [0,1]X[0,1])
+				// This looks like where I can approximate attenuation..
+				var filterLen = 0.6;
+
+				// Samples taken by filter
+
+				var TAPS_PER_PASS = 6.0;
+
+				// Pass order could equivalently be 3,2,1 (instead of 1,2,3), which
+				// would start with a small filter support and grow to large. however
+				// the large-to-small order produces less objectionable aliasing artifacts that
+				// appear as a glimmer along the length of the beams
+
+				// pass 1 - render into first ping-pong target
+
+				var pass = 1.0;
+				var stepLen = filterLen * Math.pow( TAPS_PER_PASS, -pass );
+
+				postprocessing.godrayGenUniforms[ "fStepSize" ].value = stepLen;
+				postprocessing.godrayGenUniforms[ "tInput" ].value = postprocessing.rtTextureDepth;
+
+				postprocessing.scene.overrideMaterial = postprocessing.materialGodraysGenerate;
+
+				renderer.render( postprocessing.scene, postprocessing.camera, postprocessing.rtTextureGodRays2 );
+
+				// pass 2 - render into second ping-pong target
+				/*
+				pass = 2.0;
+				stepLen = filterLen * Math.pow( TAPS_PER_PASS, -pass );
+
+				postprocessing.godrayGenUniforms[ "fStepSize" ].value = stepLen;
+				postprocessing.godrayGenUniforms[ "tInput" ].value = postprocessing.rtTextureGodRays2;
+
+				renderer.render( postprocessing.scene, postprocessing.camera, postprocessing.rtTextureGodRays1  );
+
+				// pass 3 - 1st RT
+				*/
+				pass = 3.0;
+				stepLen = filterLen * Math.pow( TAPS_PER_PASS, -pass );
+
+				postprocessing.godrayGenUniforms[ "fStepSize" ].value = stepLen;
+				postprocessing.godrayGenUniforms[ "tInput" ].value = postprocessing.rtTextureGodRays1;
+
+				renderer.render( postprocessing.scene, postprocessing.camera , postprocessing.rtTextureGodRays2  );
+
+				// final pass - composite god-rays onto colors
+
+				postprocessing.godrayCombineUniforms["tColors"].value = postprocessing.rtTextureColors;
+				postprocessing.godrayCombineUniforms["tGodRays"].value = postprocessing.rtTextureGodRays2;
+
+				postprocessing.scene.overrideMaterial = postprocessing.materialGodraysCombine;
+
+				renderer.render( postprocessing.scene, postprocessing.camera );
+				postprocessing.scene.overrideMaterial = null;
+
+			} else {
+
+				renderer.clear();
+				renderer.render( scene, camera );
+
+			}
+
+		}
+
+	</script>
+
+</body>
+</html>
